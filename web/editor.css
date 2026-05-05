@@ -1,0 +1,97 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --line-h: 19px;
+  --font: "Courier New", Courier, monospace;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #fbfbfa;
+  color: #274b50;
+  font-family: Arial, sans-serif;
+}
+
+.toolbar {
+  display: none;
+}
+
+.editor {
+  min-height: 100vh;
+  padding: 28px 30px 42px;
+  overflow: auto;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: var(--line-h);
+  background: #fbfbfa;
+}
+
+.song-line {
+  margin: 0;
+  padding: 0;
+}
+
+.text-line,
+.plain-line,
+.blank-line {
+  display: block;
+  width: 100%;
+  height: var(--line-h);
+  min-height: var(--line-h);
+  line-height: var(--line-h);
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+  background: transparent;
+  color: #274b50;
+  font-family: var(--font);
+  font-size: 14px;
+}
+
+body.block-selecting .text-line,
+body.block-selecting .plain-line,
+body.block-selecting .blank-line {
+  user-select: none;
+}
+
+.song-line.no-chords:not(.chord-active) .chord-line {
+  display: none;
+}
+
+.chord-line {
+  color: #497f8a;
+  font-weight: bold;
+}
+
+.song-line.chord-active .chord-line {
+  background: #f8ddb0;
+}
+
+.song-line.lyric-active .lyric-line {
+  background: #d8e8e9;
+}
+
+.editor.document-selected .text-line,
+.editor.document-selected .plain-line,
+.editor.document-selected .blank-line,
+.song-line.range-selected .lyric-line,
+.plain-line.range-selected,
+.blank-line.range-selected {
+  background: #d8e8e9;
+}
+
+.editor.document-selected .chord-line,
+.song-line.range-selected .chord-line {
+  background: #f8ddb0;
+}
+
+.blank-line {
+  white-space: pre;
+}

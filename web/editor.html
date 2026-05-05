@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Editor ChordPro</title>
+    <link rel="stylesheet" href="/editor.css" />
+  </head>
+  <body>
+    <div class="toolbar" hidden>
+      <label for="songInput">Abrir</label>
+      <input id="songInput" type="file" accept=".cho,.chopro,.chordpro,.txt" hidden />
+      <span id="fileStatus" hidden></span>
+      <button id="chordProButton" type="button">ChordPro</button>
+      <button id="pdfButton" type="button">PDF</button>
+      <a id="downloadLink" class="download-link" hidden>Descargar</a>
+    </div>
+
+    <main id="editor" class="editor" aria-label="Editor de texto"></main>
+
+    <script src="/editor15/app.js"></script>
+  </body>
+</html>

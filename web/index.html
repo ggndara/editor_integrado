@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Letras + Acordes</title>
+    <script>
+      if (window.location.protocol === "file:") {
+        window.location.replace("http://127.0.0.1:8080/");
+      }
+    </script>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <section class="stage">
+      <main class="composition">
+        <section id="editorCard" class="editor-card" aria-label="Editor de ChordPro">
+          <header class="editor-titlebar">
+            <h1>Editor de ChordPro</h1>
+            <div class="window-actions">
+              <button id="clearEditorButton" class="round-button" type="button" title="Limpiar editor">x</button>
+              <button id="copyChordProButton" class="round-button" type="button" title="Copiar ChordPro">□</button>
+            </div>
+          </header>
+
+          <section class="editor-window">
+            <iframe id="editorFrame" title="Editor ChordPro" src="/editor.html"></iframe>
+          </section>
+
+          <footer class="brand-footer">
+            <span class="brand-word">texto</span>
+            <span class="brand-console">console</span>
+          </footer>
+        </section>
+
+        <aside class="console-card" aria-label="Consola de flujo">
+          <div class="console-brand">
+            <span class="brand-word">texto</span>
+            <span class="brand-console">console</span>
+          </div>
+
+          <label id="dropZone" class="console-command" for="audioInput">
+            <input id="audioInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.aac,.aiff,.aif,.mp4" hidden />
+            <span id="audioName">Subir archivo de audio</span>
+          </label>
+
+          <button id="transcribeButton" class="console-button" type="button" disabled>
+            Generar ChordPro
+          </button>
+
+          <button id="exportBothButton" class="console-button primary" type="button" disabled>
+            Exportar PDF y ChordPro
+          </button>
+
+          <p id="statusText" class="status">Listo.</p>
+        </aside>
+      </main>
+    </section>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
