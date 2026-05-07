@@ -1,6 +1,6 @@
 [submodule "deps/14_LetrasAcordesv4"]
 	path = deps/14_LetrasAcordesv4
-	url = /Users/ggndara/Documents/Codex/14_LetrasAcordesv4
+	url = https://github.com/ggndara/audio_a_acordes.git
 [submodule "deps/15_EditorChordPro"]
 	path = deps/15_EditorChordPro
-	url = /Users/ggndara/Documents/Codex/15_EditorChordPro
+	url = https://github.com/ggndara/15_EditorChordPro.git
