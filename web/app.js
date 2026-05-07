@@ -2,10 +2,7 @@ const els = {
   audioInput: document.querySelector("#audioInput"),
   audioName: document.querySelector("#audioName"),
   dropZone: document.querySelector("#dropZone"),
-  transcribeButton: document.querySelector("#transcribeButton"),
-  exportBothButton: document.querySelector("#exportBothButton"),
-  clearEditorButton: document.querySelector("#clearEditorButton"),
-  copyChordProButton: document.querySelector("#copyChordProButton"),
+  exportPdfButton: document.querySelector("#exportPdfButton"),
   editorCard: document.querySelector("#editorCard"),
   editorFrame: document.querySelector("#editorFrame"),
   statusText: document.querySelector("#statusText"),
@@ -13,6 +10,8 @@ const els = {
 
 let selectedAudio = null;
 let currentChordProName = "cancion.chopro";
+let appBusy = false;
+let currentDocumentReady = false;
 
 if ("scrollRestoration" in window.history) {
   window.history.scrollRestoration = "manual";
@@ -24,8 +23,10 @@ function setStatus(message) {
 }
 
 function setBusy(busy) {
-  els.transcribeButton.disabled = busy || !selectedAudio;
-  els.exportBothButton.disabled = busy || !editorHasDocument();
+  appBusy = busy;
+  els.dropZone.classList.toggle("busy", busy);
+  els.audioInput.disabled = busy;
+  els.exportPdfButton.disabled = busy || !currentDocumentReady || !editorHasDocument();
 }
 
 function editorHasDocument() {
@@ -58,17 +59,29 @@ function textToBase64Url(text) {
     .replace(/=+$/g, "");
 }
 
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
 function setAudio(file) {
   selectedAudio = file || null;
-  els.audioName.textContent = file ? file.name : "Elegir archivo";
+  els.audioName.textContent = "Subir audio";
+  els.dropZone.title = file ? file.name : "Subir audio";
   setBusy(false);
+  if (selectedAudio) transcribeAudio();
 }
 
 async function transcribeAudio() {
   if (!selectedAudio) return;
 
   setBusy(true);
-  setStatus("Subiendo audio y ejecutando el pipeline 14 en español...");
+  setStatus("");
+  openPlainTextInEditor("Procesando el archivo de audio, esto puede tardar unos minutos.", "procesando.txt");
 
   try {
     const base64 = await fileToBase64(selectedAudio);
@@ -78,56 +91,78 @@ async function transcribeAudio() {
       body: JSON.stringify({
         filename: selectedAudio.name,
         base64,
-        lyrics_language: "es",
       }),
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {
-      throw new Error(result.output || result.error || "No se pudo generar ChordPro.");
+      throw new Error(result.error || "No se pudo procesar el audio.");
     }
 
     currentChordProName = `${result.artifacts.song_id || "cancion"}.chopro`;
     openChordProInEditor(result.chordpro, currentChordProName);
-    setStatus(`ChordPro generado en ${result.elapsed_sec}s.\nAhora corregi el texto en el editor.`);
+    setStatus("");
   } catch (error) {
-    setStatus(`Error:\n${error.message}`);
+    openPlainTextInEditor(`No pude procesar el audio.\n\n${error.message}`, "error.txt");
+    setStatus(error.message);
   } finally {
+    els.audioInput.value = "";
     setBusy(false);
   }
 }
 
+function openPlainTextInEditor(source, name) {
+  openEditorSource(source, name, false);
+}
+
 function openChordProInEditor(source, name) {
+  openEditorSource(source, name, true);
+}
+
+function openEditorSource(source, name, exportable) {
+  currentDocumentReady = exportable;
   const params = new URLSearchParams();
   params.set("source", textToBase64Url(source));
   params.set("name", name || currentChordProName);
   els.editorFrame.dataset.revealOnLoad = "true";
   els.editorFrame.src = `/editor.html?v=${Date.now()}#${params.toString()}`;
-  els.exportBothButton.disabled = false;
+  els.exportPdfButton.disabled = !exportable;
 }
 
-async function exportPdfAndChordPro() {
+async function exportPdf() {
   const frame = els.editorFrame.contentWindow;
   if (!frame) return;
 
   setBusy(true);
-  setStatus("Exportando ChordPro y PDF desde el editor 15...");
+  setStatus("");
 
   try {
-    if (typeof frame.saveChordPro === "function") {
-      await frame.saveChordPro();
-    } else {
-      frame.document.querySelector("#chordProButton")?.click();
+    if (!frame.hasContent?.()) {
+      throw new Error("No hay contenido para exportar.");
     }
 
-    if (typeof frame.savePdf === "function") {
-      await frame.savePdf();
-    } else {
-      frame.document.querySelector("#pdfButton")?.click();
+    frame.syncEditorToDoc?.();
+    const rows = frame.exportPdfRows?.() || [];
+    const bytes = frame.makePdfBytes?.(rows.length ? rows : [{ text: "", kind: "blank" }]);
+    if (!bytes?.byteLength) {
+      throw new Error("El PDF generado quedo vacio.");
     }
 
-    setStatus("Exportacion lista. Los archivos quedaron en runtime/exports.");
+    const response = await fetch("/save-pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: `${frame.sourceBaseName?.() || "cancion"}.pdf`,
+        base64: bytesToBase64(bytes),
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "No se pudo exportar el PDF.");
+    }
+    if (result.cancelled) return;
   } catch (error) {
-    setStatus(`Error al exportar:\n${error.message}`);
+    setStatus(error.message);
+    window.alert(`No pude exportar el PDF.\n\n${error.message}`);
   } finally {
     setBusy(false);
   }
@@ -138,10 +173,10 @@ async function loadStatus() {
     const response = await fetch("/api/status");
     const status = await response.json();
     if (!status.transcriber_python_exists) {
-      setStatus(`Atencion: no encontre Python del transcriptor.\n${status.transcriber_python}`);
+      setStatus(`No encontre Python del transcriptor: ${status.transcriber_python}`);
       return;
     }
-    setStatus("Listo. Subi un audio para empezar.");
+    setStatus("");
   } catch {
     setStatus("No pude leer el estado del servidor.");
   }
@@ -166,19 +201,7 @@ els.dropZone.addEventListener("drop", (event) => {
   setAudio(event.dataTransfer.files?.[0]);
 });
 
-els.transcribeButton.addEventListener("click", transcribeAudio);
-els.exportBothButton.addEventListener("click", exportPdfAndChordPro);
-els.clearEditorButton.addEventListener("click", () => {
-  els.editorFrame.src = "/editor.html";
-  els.exportBothButton.disabled = true;
-  setStatus("Editor limpio.");
-});
-els.copyChordProButton.addEventListener("click", async () => {
-  const frame = els.editorFrame.contentWindow;
-  if (!frame?.exportChordPro) return;
-  await navigator.clipboard.writeText(frame.exportChordPro());
-  setStatus("ChordPro copiado.");
-});
+els.exportPdfButton.addEventListener("click", exportPdf);
 els.editorFrame.addEventListener("load", () => {
   if (els.editorFrame.dataset.revealOnLoad === "true") {
     delete els.editorFrame.dataset.revealOnLoad;
@@ -188,7 +211,7 @@ els.editorFrame.addEventListener("load", () => {
       }
     }, 120);
   }
-  setBusy(false);
+  if (!appBusy) setBusy(false);
 });
 
 loadStatus();

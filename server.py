@@ -22,6 +22,7 @@ UPLOADS_ROOT = RUNTIME_ROOT / "uploads"
 EXPORTS_ROOT = RUNTIME_ROOT / "exports"
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8080"))
+CHORDPRO_EXTENSIONS = {".cho", ".chopro", ".chordpro"}
 
 
 def read_gitmodules_url(path: str) -> Path | None:
@@ -103,6 +104,29 @@ def write_base64_file(target: Path, value: str) -> int:
     return len(data)
 
 
+def applescript_string(value: str) -> str:
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def choose_save_path(default_name: str, prompt: str) -> Path | None:
+    script = (
+        f"set outputFile to choose file name with prompt {applescript_string(prompt)} "
+        f"default name {applescript_string(default_name)}\n"
+        "return POSIX path of outputFile"
+    )
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+    if result.returncode == 0 and result.stdout.strip():
+        return Path(result.stdout.strip()).expanduser()
+    if "User canceled" in result.stderr or result.returncode == -128:
+        return None
+    raise RuntimeError((result.stderr or result.stdout or "no pude abrir el selector de archivo").strip())
+
+
+def validate_pdf_data(data: bytes) -> None:
+    if not data.startswith(b"%PDF-") or not data.rstrip().endswith(b"%%EOF"):
+        raise ValueError("pdf invalido")
+
+
 def serve_file(handler: SimpleHTTPRequestHandler, root: Path, request_path: str) -> None:
     relative = unquote(request_path).lstrip("/")
     target = (root / relative).resolve()
@@ -152,6 +176,72 @@ def parse_pipeline_artifacts(output: str, runtime_root: Path) -> dict:
     }
 
 
+def chordpro_priority(path: Path) -> tuple[int, float]:
+    name = path.name.lower()
+    score = 0
+    if "final" in name:
+        score -= 3
+    if "song" in name:
+        score -= 2
+    if path.suffix.lower() in {".cho", ".chopro"}:
+        score -= 1
+    return (score, -path.stat().st_mtime)
+
+
+def readable_chordpro(path: Path) -> bool:
+    if not path.is_file() or path.suffix.lower() not in CHORDPRO_EXTENSIONS:
+        return False
+    try:
+        return bool(path.read_text(encoding="utf-8").strip())
+    except UnicodeDecodeError:
+        return False
+
+
+def find_chordpro_file(artifacts: dict, runtime_root: Path, output: str) -> Path | None:
+    file_candidates: list[Path] = []
+    dir_candidates: list[Path] = []
+
+    if artifacts.get("chordpro_path"):
+        file_candidates.append(Path(artifacts["chordpro_path"]))
+
+    if artifacts.get("song_dir"):
+        song_dir = Path(artifacts["song_dir"])
+        dir_candidates.extend([
+            song_dir / "10_chordpro",
+            song_dir / "chordpro",
+            song_dir / "ChordPro",
+            song_dir,
+        ])
+
+    if artifacts.get("song_id"):
+        song_dir = runtime_root / "songs" / artifacts["song_id"]
+        dir_candidates.extend([
+            song_dir / "10_chordpro",
+            song_dir / "chordpro",
+            song_dir / "ChordPro",
+            song_dir,
+        ])
+
+    for match in re.findall(r"(/[^\n\r]+?\.(?:cho|chopro|chordpro))\b", output, flags=re.IGNORECASE):
+        file_candidates.append(Path(match.strip()))
+
+    for candidate in file_candidates:
+        if readable_chordpro(candidate):
+            return candidate
+
+    seen_dirs: set[Path] = set()
+    for directory in dir_candidates:
+        directory = directory.resolve()
+        if directory in seen_dirs or not directory.is_dir():
+            continue
+        seen_dirs.add(directory)
+        files = [path for path in directory.rglob("*") if readable_chordpro(path)]
+        if files:
+            return sorted(files, key=chordpro_priority)[0]
+
+    return None
+
+
 def run_command(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
@@ -171,14 +261,11 @@ def run_transcription(payload: dict) -> dict:
 
     runtime_root = transcriber_runtime_root()
     python = transcriber_python(runtime_root)
-    lyrics_language = payload.get("lyrics_language") or "es"
     pipeline_command = [
         str(python),
         "scripts/run_full_pipeline.py",
         "--input",
         str(audio_path),
-        "--lyrics-language",
-        lyrics_language,
     ]
     if payload.get("force"):
         pipeline_command.append("--force")
@@ -189,12 +276,15 @@ def run_transcription(payload: dict) -> dict:
     artifacts = parse_pipeline_artifacts(output, runtime_root)
     chordpro_text = ""
 
-    chordpro_path = Path(artifacts["chordpro_path"]) if artifacts.get("chordpro_path") else None
-    if chordpro_path and chordpro_path.exists():
+    chordpro_path = find_chordpro_file(artifacts, runtime_root, output)
+    if chordpro_path:
+        artifacts["chordpro_path"] = str(chordpro_path)
         chordpro_text = chordpro_path.read_text(encoding="utf-8")
 
+    ok = result.returncode == 0 and bool(chordpro_text.strip())
+
     return {
-        "ok": result.returncode == 0 and bool(chordpro_text.strip()),
+        "ok": ok,
         "returncode": result.returncode,
         "job_id": job_id,
         "elapsed_sec": round(time.time() - started, 2),
@@ -203,6 +293,7 @@ def run_transcription(payload: dict) -> dict:
         "output": output[-20000:],
         "artifacts": artifacts,
         "chordpro": chordpro_text,
+        "error": None if ok else "El procesamiento termino, pero no encontre un ChordPro final para abrir en el editor.",
     }
 
 
@@ -234,6 +325,27 @@ def save_export(payload: dict, kind: str) -> dict:
         "size": size,
         "path": str(output),
         "url": f"/exports/{stamped}",
+    }
+
+
+def save_pdf_as(payload: dict) -> dict:
+    filename = safe_pdf_name(payload.get("filename") or "cancion.pdf")
+    data = base64.b64decode(payload.get("base64") or "", validate=True)
+    validate_pdf_data(data)
+
+    target = choose_save_path(filename, "Guardar PDF")
+    if target is None:
+        return {"ok": True, "cancelled": True}
+    if target.suffix.lower() != ".pdf":
+        target = target.with_suffix(".pdf")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return {
+        "ok": True,
+        "filename": target.name,
+        "size": len(data),
+        "path": str(target),
     }
 
 
@@ -294,7 +406,11 @@ class Handler(SimpleHTTPRequestHandler):
                 result = run_transcription(payload)
                 json_response(self, 200 if result["ok"] else 500, result)
                 return
-            if path in {"/save-pdf", "/export-pdf"}:
+            if path == "/save-pdf":
+                payload = read_json_payload(self, 40_000_000)
+                json_response(self, 200, save_pdf_as(payload))
+                return
+            if path == "/export-pdf":
                 payload = read_json_payload(self, 40_000_000)
                 json_response(self, 200, save_export(payload, "pdf"))
                 return
