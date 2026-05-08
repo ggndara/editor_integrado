@@ -159,6 +159,9 @@ async function exportPdf() {
     if (!response.ok || !result.ok) {
       throw new Error(result.error || "No se pudo exportar el PDF.");
     }
+    if (result.url) {
+      window.open(`${result.url}?v=${Date.now()}`, "_blank", "noopener");
+    }
     if (result.cancelled) return;
   } catch (error) {
     setStatus(error.message);

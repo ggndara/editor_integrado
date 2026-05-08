@@ -333,6 +333,9 @@ def save_pdf_as(payload: dict) -> dict:
     data = base64.b64decode(payload.get("base64") or "", validate=True)
     validate_pdf_data(data)
 
+    if os.environ.get("PDF_SAVE_MODE") == "runtime" or not shutil.which("osascript"):
+        return save_export(payload, "pdf")
+
     target = choose_save_path(filename, "Guardar PDF")
     if target is None:
         return {"ok": True, "cancelled": True}

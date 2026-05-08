@@ -1,0 +1,15 @@
+services:
+  editor-integrado:
+    build:
+      context: .
+    ports:
+      - "8080:8080"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Defini OPENAI_API_KEY en tu entorno o en un .env local}
+      HOST: 0.0.0.0
+      PORT: 8080
+      TRANSCRIBER_ROOT: /app/deps/14_LetrasAcordesv4
+      PDF_SAVE_MODE: runtime
+    volumes:
+      - ./runtime:/app/runtime
+      - ./docker-data/songs:/app/deps/14_LetrasAcordesv4/songs
