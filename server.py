@@ -252,6 +252,46 @@ def run_command(command: list[str], cwd: Path) -> subprocess.CompletedProcess[st
     )
 
 
+def transcribe_debug_enabled() -> bool:
+    value = os.environ.get("TRANSCRIBE_DEBUG_LOGS", "1").lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def tail_output(output: str) -> str:
+    max_lines = int(os.environ.get("TRANSCRIBE_DEBUG_LINES", "80"))
+    lines = output.splitlines()
+    if len(lines) <= max_lines:
+        return output
+    omitted = len(lines) - max_lines
+    return f"... {omitted} lineas anteriores omitidas ...\n" + "\n".join(lines[-max_lines:])
+
+
+def log_transcription_failure(
+    *,
+    filename: str,
+    job_id: str,
+    runtime_root: Path,
+    command: list[str],
+    completed: subprocess.CompletedProcess[str],
+    elapsed_sec: float,
+    artifacts: dict,
+    output: str,
+) -> None:
+    # Diagnostico temporal para Railway: no imprime base64 ni secretos.
+    if not transcribe_debug_enabled():
+        return
+
+    print("[transcribe-debug] fallo en /api/transcribe", flush=True)
+    print(f"[transcribe-debug] audio={filename} job_id={job_id}", flush=True)
+    print(f"[transcribe-debug] cwd={runtime_root}", flush=True)
+    print(f"[transcribe-debug] command={' '.join(command)}", flush=True)
+    print(f"[transcribe-debug] returncode={completed.returncode} elapsed_sec={elapsed_sec}", flush=True)
+    print(f"[transcribe-debug] artifacts={json.dumps(artifacts, ensure_ascii=False)}", flush=True)
+    print("[transcribe-debug] output_tail_start", flush=True)
+    print(tail_output(output), flush=True)
+    print("[transcribe-debug] output_tail_end", flush=True)
+
+
 def run_transcription(payload: dict) -> dict:
     filename = safe_audio_name(payload.get("filename") or "audio")
     job_id = f"{int(time.time())}-{re.sub(r'[^a-z0-9]+', '-', Path(filename).stem.lower()).strip('-') or 'audio'}"
@@ -271,8 +311,9 @@ def run_transcription(payload: dict) -> dict:
         pipeline_command.append("--force")
 
     started = time.time()
-    result = run_command(pipeline_command, runtime_root)
-    output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
+    completed = run_command(pipeline_command, runtime_root)
+    elapsed_sec = round(time.time() - started, 2)
+    output = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
     artifacts = parse_pipeline_artifacts(output, runtime_root)
     chordpro_text = ""
 
@@ -281,13 +322,24 @@ def run_transcription(payload: dict) -> dict:
         artifacts["chordpro_path"] = str(chordpro_path)
         chordpro_text = chordpro_path.read_text(encoding="utf-8")
 
-    ok = result.returncode == 0 and bool(chordpro_text.strip())
+    ok = completed.returncode == 0 and bool(chordpro_text.strip())
+    if not ok:
+        log_transcription_failure(
+            filename=filename,
+            job_id=job_id,
+            runtime_root=runtime_root,
+            command=pipeline_command,
+            completed=completed,
+            elapsed_sec=elapsed_sec,
+            artifacts=artifacts,
+            output=output,
+        )
 
     return {
         "ok": ok,
-        "returncode": result.returncode,
+        "returncode": completed.returncode,
         "job_id": job_id,
-        "elapsed_sec": round(time.time() - started, 2),
+        "elapsed_sec": elapsed_sec,
         "runtime_root": str(runtime_root),
         "command": " ".join(pipeline_command),
         "output": output[-20000:],
@@ -423,6 +475,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             json_response(self, 404, {"ok": False, "error": "ruta inexistente"})
         except Exception as error:
+            if path == "/api/transcribe" and transcribe_debug_enabled():
+                print(f"[transcribe-debug] excepcion en /api/transcribe: {error!r}", flush=True)
             json_response(self, 400, {"ok": False, "error": str(error)})
 
 
