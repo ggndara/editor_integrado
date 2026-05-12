@@ -258,7 +258,7 @@ def transcribe_debug_enabled() -> bool:
 
 
 def tail_output(output: str) -> str:
-    max_lines = int(os.environ.get("TRANSCRIBE_DEBUG_LINES", "80"))
+    max_lines = int(os.environ.get("TRANSCRIBE_DEBUG_LINES", "200"))
     lines = output.splitlines()
     if len(lines) <= max_lines:
         return output
