@@ -12,6 +12,7 @@ let selectedAudio = null;
 let currentChordProName = "cancion.chopro";
 let appBusy = false;
 let currentDocumentReady = false;
+const TRANSCRIBE_UPLOAD_ATTEMPTS = 3;
 
 if ("scrollRestoration" in window.history) {
   window.history.scrollRestoration = "manual";
@@ -56,6 +57,61 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function uploadHeaders(file) {
+  return {
+    "Content-Type": file.type || "application/octet-stream",
+    "X-Audio-Filename": encodeURIComponent(file.name || "audio"),
+  };
+}
+
+function uploadCanBeRetried(error, response) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("request incompleto") ||
+    message.includes("subida incompleta") ||
+    message.includes("failed to fetch") ||
+    message.includes("networkerror") ||
+    (response?.status === 400 && message.includes("incompleto"))
+  );
+}
+
+async function transcribeUploadedAudio(file) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= TRANSCRIBE_UPLOAD_ATTEMPTS; attempt += 1) {
+    let response = null;
+    try {
+      response = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: uploadHeaders(file),
+        body: file,
+      });
+      const result = await response.json().catch(() => null);
+      if (response.ok && result?.ok) return result;
+
+      lastError = new Error(result?.error || "No se pudo procesar el audio.");
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < TRANSCRIBE_UPLOAD_ATTEMPTS && uploadCanBeRetried(lastError, response)) {
+      setStatus(`La subida se corto; reintentando (${attempt + 1}/${TRANSCRIBE_UPLOAD_ATTEMPTS}).`);
+      await wait(700 * attempt);
+      continue;
+    }
+
+    throw lastError;
+  }
+
+  throw lastError || new Error("No se pudo procesar el audio.");
+}
+
 function setAudio(file) {
   selectedAudio = file || null;
   els.audioName.textContent = "Subir audio";
@@ -72,18 +128,7 @@ async function transcribeAudio() {
   openPlainTextInEditor("Procesando el archivo de audio, esto puede tardar unos minutos.", "procesando.txt");
 
   try {
-    const response = await fetch("/api/transcribe", {
-      method: "POST",
-      headers: {
-        "Content-Type": selectedAudio.type || "application/octet-stream",
-        "X-Audio-Filename": encodeURIComponent(selectedAudio.name || "audio"),
-      },
-      body: selectedAudio,
-    });
-    const result = await response.json();
-    if (!response.ok || !result.ok) {
-      throw new Error(result.error || "No se pudo procesar el audio.");
-    }
+    const result = await transcribeUploadedAudio(selectedAudio);
 
     currentChordProName = `${result.artifacts.song_id || "cancion"}.chopro`;
     openChordProInEditor(result.chordpro, currentChordProName);
