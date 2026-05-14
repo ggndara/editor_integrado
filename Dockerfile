@@ -12,6 +12,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+ARG TRANSCRIBER_REPO=https://github.com/ggndara/audio_a_acordes.git
+ARG TRANSCRIBER_REF=afcef91d083e07d2cf8627db576c6283a0bfb0ce
+ARG EDITOR_REPO=https://github.com/ggndara/15_EditorChordPro.git
+ARG EDITOR_REF=abf8db896dbada853358b40a20a6486869340413
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       build-essential \
@@ -22,8 +27,10 @@ RUN apt-get update \
       pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-COPY deps/14_LetrasAcordesv4/pyproject.toml deps/14_LetrasAcordesv4/README.md /app/deps/14_LetrasAcordesv4/
-COPY deps/14_LetrasAcordesv4/src /app/deps/14_LetrasAcordesv4/src
+RUN git clone --filter=blob:none --no-checkout "$TRANSCRIBER_REPO" /app/deps/14_LetrasAcordesv4 \
+    && git -C /app/deps/14_LetrasAcordesv4 checkout "$TRANSCRIBER_REF" \
+    && git clone --filter=blob:none --no-checkout "$EDITOR_REPO" /app/deps/15_EditorChordPro \
+    && git -C /app/deps/15_EditorChordPro checkout "$EDITOR_REF"
 
 RUN python -m pip install --upgrade pip "setuptools<81" wheel \
     && python -m pip install "Cython>=3.0" "numpy>=1.24,<3.0" "scipy>=1.10,<2.0" \
