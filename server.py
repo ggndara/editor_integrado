@@ -23,6 +23,7 @@ EXPORTS_ROOT = RUNTIME_ROOT / "exports"
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8080"))
 CHORDPRO_EXTENSIONS = {".cho", ".chopro", ".chordpro"}
+TRANSCRIBE_UPLOAD_LIMIT = 300_000_000
 
 
 def read_gitmodules_url(path: str) -> Path | None:
@@ -90,15 +91,34 @@ def json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict)
     handler.wfile.write(body)
 
 
-def read_json_payload(handler: SimpleHTTPRequestHandler, limit: int) -> dict:
+def read_request_body(handler: SimpleHTTPRequestHandler, limit: int) -> bytes:
     length = int(handler.headers.get("Content-Length", "0"))
     if length <= 0 or length > limit:
         raise ValueError("tamano de request invalido")
-    return json.loads(handler.rfile.read(length).decode("utf-8"))
+    body = handler.rfile.read(length)
+    if len(body) != length:
+        raise ValueError(f"request incompleto: esperaba {length} bytes, llegaron {len(body)}")
+    return body
+
+
+def read_json_payload(handler: SimpleHTTPRequestHandler, limit: int) -> dict:
+    body = read_request_body(handler, limit)
+    try:
+        return json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"json invalido: {error.msg} en linea {error.lineno}, columna {error.colno}") from error
 
 
 def write_base64_file(target: Path, value: str) -> int:
     data = base64.b64decode(value or "", validate=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return len(data)
+
+
+def write_binary_file(target: Path, data: bytes) -> int:
+    if not data:
+        raise ValueError("audio vacio")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
     return len(data)
@@ -292,13 +312,15 @@ def log_transcription_failure(
     print("[transcribe-debug] output_tail_end", flush=True)
 
 
-def run_transcription(payload: dict) -> dict:
-    filename = safe_audio_name(payload.get("filename") or "audio")
+def prepare_audio_upload(filename: str) -> tuple[str, str, Path, Path]:
+    filename = safe_audio_name(filename or "audio")
     job_id = f"{int(time.time())}-{re.sub(r'[^a-z0-9]+', '-', Path(filename).stem.lower()).strip('-') or 'audio'}"
     job_dir = UPLOADS_ROOT / job_id
     audio_path = job_dir / filename
-    write_base64_file(audio_path, payload.get("base64") or "")
+    return filename, job_id, job_dir, audio_path
 
+
+def run_transcription_for_audio(filename: str, job_id: str, audio_path: Path, force: bool = False) -> dict:
     runtime_root = transcriber_runtime_root()
     python = transcriber_python(runtime_root)
     pipeline_command = [
@@ -307,7 +329,7 @@ def run_transcription(payload: dict) -> dict:
         "--input",
         str(audio_path),
     ]
-    if payload.get("force"):
+    if force:
         pipeline_command.append("--force")
 
     started = time.time()
@@ -347,6 +369,21 @@ def run_transcription(payload: dict) -> dict:
         "chordpro": chordpro_text,
         "error": None if ok else "El procesamiento termino, pero no encontre un ChordPro final para abrir en el editor.",
     }
+
+
+def run_transcription(payload: dict) -> dict:
+    filename, job_id, _job_dir, audio_path = prepare_audio_upload(payload.get("filename") or "audio")
+    write_base64_file(audio_path, payload.get("base64") or "")
+    return run_transcription_for_audio(filename, job_id, audio_path, force=bool(payload.get("force")))
+
+
+def run_transcription_upload(handler: SimpleHTTPRequestHandler) -> dict:
+    filename = unquote(handler.headers.get("X-Audio-Filename") or "audio")
+    data = read_request_body(handler, TRANSCRIBE_UPLOAD_LIMIT)
+    filename, job_id, _job_dir, audio_path = prepare_audio_upload(filename)
+    write_binary_file(audio_path, data)
+    force = handler.headers.get("X-Transcribe-Force", "").lower() in {"1", "true", "yes", "on"}
+    return run_transcription_for_audio(filename, job_id, audio_path, force=force)
 
 
 def save_export(payload: dict, kind: str) -> dict:
@@ -457,8 +494,11 @@ class Handler(SimpleHTTPRequestHandler):
         path = parsed.path
         try:
             if path == "/api/transcribe":
-                payload = read_json_payload(self, 300_000_000)
-                result = run_transcription(payload)
+                content_type = self.headers.get("Content-Type", "")
+                if content_type.startswith("application/json"):
+                    result = run_transcription(read_json_payload(self, TRANSCRIBE_UPLOAD_LIMIT))
+                else:
+                    result = run_transcription_upload(self)
                 json_response(self, 200 if result["ok"] else 500, result)
                 return
             if path == "/save-pdf":
@@ -477,6 +517,12 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as error:
             if path == "/api/transcribe" and transcribe_debug_enabled():
                 print(f"[transcribe-debug] excepcion en /api/transcribe: {error!r}", flush=True)
+                print(
+                    "[transcribe-debug] "
+                    f"content_type={self.headers.get('Content-Type')} "
+                    f"content_length={self.headers.get('Content-Length')}",
+                    flush=True,
+                )
             json_response(self, 400, {"ok": False, "error": str(error)})
 
 

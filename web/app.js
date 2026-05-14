@@ -38,18 +38,6 @@ function editorHasDocument() {
   }
 }
 
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = String(reader.result || "");
-      resolve(value.includes(",") ? value.split(",", 2)[1] : value);
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
 function textToBase64Url(text) {
   return btoa(
     Array.from(new TextEncoder().encode(text), (byte) => String.fromCharCode(byte)).join(""),
@@ -84,14 +72,13 @@ async function transcribeAudio() {
   openPlainTextInEditor("Procesando el archivo de audio, esto puede tardar unos minutos.", "procesando.txt");
 
   try {
-    const base64 = await fileToBase64(selectedAudio);
     const response = await fetch("/api/transcribe", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: selectedAudio.name,
-        base64,
-      }),
+      headers: {
+        "Content-Type": selectedAudio.type || "application/octet-stream",
+        "X-Audio-Filename": encodeURIComponent(selectedAudio.name || "audio"),
+      },
+      body: selectedAudio,
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {
